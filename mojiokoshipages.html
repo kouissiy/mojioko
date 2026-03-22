@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>文字起こし</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+    background: #000;
+    color: #fff;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* 履歴エリア */
+  #history {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+
+  .history-item {
+    font-size: 36px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: #ccc;
+    word-break: break-all;
+  }
+
+  .history-item.latest {
+    color: #fff;
+    font-size: 42px;
+  }
+
+  /* リアルタイム表示 */
+  #interim-box {
+    padding: 16px 20px;
+    min-height: 80px;
+    font-size: 38px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: #888;
+    word-break: break-all;
+    border-top: 1px solid #222;
+  }
+
+  /* ボタンエリア */
+  .controls {
+    padding: 16px 20px 28px;
+    display: flex;
+    gap: 12px;
+    border-top: 1px solid #222;
+  }
+
+  #micBtn {
+    flex: 1;
+    padding: 22px;
+    border: none;
+    border-radius: 16px;
+    font-family: inherit;
+    font-size: 22px;
+    font-weight: 700;
+    cursor: pointer;
+    background: #1d4ed8;
+    color: white;
+    transition: background 0.15s, transform 0.1s;
+    letter-spacing: 0.03em;
+  }
+
+  #micBtn.listening {
+    background: #dc2626;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.75; }
+  }
+
+  #micBtn:active { transform: scale(0.97); }
+
+  #clearBtn {
+    padding: 22px 24px;
+    border: 2px solid #333;
+    border-radius: 16px;
+    font-family: inherit;
+    font-size: 20px;
+    font-weight: 700;
+    cursor: pointer;
+    background: none;
+    color: #666;
+    transition: all 0.15s;
+  }
+
+  #clearBtn:active { background: #111; color: #fff; }
+
+  /* エラー */
+  #errorMsg {
+    text-align: center;
+    font-size: 18px;
+    color: #f87171;
+    padding: 8px 20px 0;
+    display: none;
+  }
+
+  /* スクロールバー非表示 */
+  #history::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+
+<div id="history"></div>
+<div id="interim-box"></div>
+<div id="errorMsg"></div>
+
+<div class="controls">
+  <button id="micBtn" onclick="toggleMic()">🎤 タップして話す</button>
+  <button id="clearBtn" onclick="clearAll()">クリア</button>
+</div>
+
+<script>
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    document.getElementById('errorMsg').style.display = 'block';
+    document.getElementById('errorMsg').textContent = 'このブラウザは音声認識に対応していません。Safari をお使いください。';
+    document.getElementById('micBtn').disabled = true;
+  }
+
+  const history = document.getElementById('history');
+  const interimBox = document.getElementById('interim-box');
+  const micBtn = document.getElementById('micBtn');
+  const errorMsg = document.getElementById('errorMsg');
+
+  let recognition = null;
+  let listening = false;
+  let finalTexts = [];
+
+  function buildRecognition() {
+    const r = new SpeechRecognition();
+    r.lang = 'ja-JP';
+    r.continuous = true;
+    r.interimResults = true;
+
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          finalTexts.push(t);
+          renderHistory();
+          interim = '';
+        } else {
+          interim += t;
+        }
+      }
+      interimBox.textContent = interim;
+      scrollBottom();
+    };
+
+    r.onerror = (e) => {
+      if (e.error === 'no-speech') return;
+      showError('エラー: ' + e.error);
+      stopMic();
+    };
+
+    r.onend = () => {
+      // listening中なら自動再起動
+      if (listening) {
+        try { r.start(); } catch(e) {}
+      }
+    };
+
+    return r;
+  }
+
+  function toggleMic() {
+    if (listening) {
+      stopMic();
+    } else {
+      startMic();
+    }
+  }
+
+  function startMic() {
+    errorMsg.style.display = 'none';
+    recognition = buildRecognition();
+    try {
+      recognition.start();
+      listening = true;
+      micBtn.textContent = '⏹ 停止';
+      micBtn.classList.add('listening');
+    } catch(e) {
+      showError('マイクを起動できませんでした。');
+    }
+  }
+
+  function stopMic() {
+    listening = false;
+    if (recognition) { try { recognition.stop(); } catch(e) {} }
+    micBtn.textContent = '🎤 タップして話す';
+    micBtn.classList.remove('listening');
+    interimBox.textContent = '';
+  }
+
+  function renderHistory() {
+    history.innerHTML = '';
+    finalTexts.forEach((t, i) => {
+      const div = document.createElement('div');
+      div.className = 'history-item' + (i === finalTexts.length - 1 ? ' latest' : '');
+      div.textContent = t;
+      history.appendChild(div);
+    });
+    scrollBottom();
+  }
+
+  function scrollBottom() {
+    history.scrollTop = history.scrollHeight;
+  }
+
+  function clearAll() {
+    finalTexts = [];
+    history.innerHTML = '';
+    interimBox.textContent = '';
+  }
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.style.display = 'block';
+  }
+</script>
+</body>
+</html>
